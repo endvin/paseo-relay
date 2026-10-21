@@ -4,7 +4,7 @@ WORKDIR /app
 ENV MIX_ENV=prod
 COPY mix.exs mix.lock ./
 # CNB 构建机在国内，连不上 builds.hex.pm：Hex 与 rebar3 用仓库里 vendor/ 的官方安装包
-# （sha512 与 builds.hex.pm 的 hex.csv / rebar3-1.x.csv 核对过），依赖包走 upyun 的 hex 镜像。
+# （sha512 与 builds.hex.pm 的 hex.csv / rebar.csv 核对过；rebar3 为 3.25.1，3.22.0 不支持 OTP 29），依赖包走 upyun 的 hex 镜像。
 COPY vendor/hex-2.5.4-otp-29.ez vendor/rebar3 /tmp/vendor/
 ENV HEX_MIRROR=https://hexpm.upyun.com
 RUN mix archive.install /tmp/vendor/hex-2.5.4-otp-29.ez --force \
