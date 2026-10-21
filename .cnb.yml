@@ -1,0 +1,21 @@
+# CNB 云原生构建：在 CNB 上编译并推送镜像，服务器只拉取不编译（部署铁律 1）。
+#
+# agent-relay.ppb.cn 的镜像。2026-10-21 起从这里出：此前的 paseo-relay-local 是在
+# sg-dokploy（C2 中招机）本机构建的，迁移时不再沿用。
+#
+# 产物：docker.cnb.cool/ppb/paseo-relay:${CNB_COMMIT_SHORT} 与 :latest
+main:
+  push:
+    - runner:
+        cpus: 8
+      services:
+        - docker
+        - vscode
+      stages:
+        - name: build and push image
+          script: |
+            set -eu
+            IMAGE="${CNB_DOCKER_REGISTRY}/${CNB_REPO_SLUG_LOWERCASE}"
+            docker build -t "${IMAGE}:${CNB_COMMIT_SHORT}" -t "${IMAGE}:latest" .
+            docker push "${IMAGE}:${CNB_COMMIT_SHORT}"
+            docker push "${IMAGE}:latest"
