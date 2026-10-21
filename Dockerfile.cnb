@@ -1,0 +1,27 @@
+# CNB 专用：与 Dockerfile 只差 Hex 的获取方式，见下方注释。
+FROM hexpm/elixir:1.20.2-erlang-29.0.2-debian-bookworm-20260623-slim AS build
+WORKDIR /app
+ENV MIX_ENV=prod
+COPY mix.exs mix.lock ./
+# CNB 构建机在国内，连不上 builds.hex.pm：Hex 与 rebar3 用仓库里 vendor/ 的官方安装包
+# （sha512 与 builds.hex.pm 的 hex.csv / rebar3-1.x.csv 核对过），依赖包走 upyun 的 hex 镜像。
+COPY vendor/hex-2.5.4-otp-29.ez vendor/rebar3 /tmp/vendor/
+ENV HEX_MIRROR=https://hexpm.upyun.com
+RUN mix archive.install /tmp/vendor/hex-2.5.4-otp-29.ez --force \
+ && mix local.rebar rebar3 /tmp/vendor/rebar3 --force \
+ && mix deps.get --only prod
+COPY config config
+COPY lib lib
+RUN mix compile && mix release
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends libstdc++6 libsctp1 openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /app/_build/prod/rel/paseo_relay ./
+ENV HOME=/app \
+    PASEO_RELAY_HOST=0.0.0.0 \
+    PASEO_RELAY_PORT=4000 \
+    PASEO_RELAY_DRAIN=false
+EXPOSE 4000
+ENTRYPOINT ["/app/bin/paseo_relay"]
+CMD ["start"]
