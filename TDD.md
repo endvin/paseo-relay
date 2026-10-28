@@ -912,3 +912,17 @@
   test/paseo_relay/handshake_validation_test.exs test/relay_protocol_test.exs`
   passed 20/20 in 81.4 seconds. `asdf exec mix format`, `asdf exec mix compile
   --warnings-as-errors --force`, and `git diff --check` exited zero.
+
+## 2026-10-28: live connection route observations
+
+- Red: `router_integration_test.exs` route observation test failed because
+  `RouteObservations.refresh/0` did not exist.
+- Green: route token reads require a live matching socket, unknown tokens fail,
+  expired carriers are omitted, addresses/tokens stay private, and CORS is usable.
+  Existing protocol tests passed with unchanged ordered text/binary forwarding.
+- A timing-sensitive metrics test discarded a first frame coalesced with the HTTP
+  upgrade. It now consumes that buffered frame before reading another TCP packet.
+- Final gate: 22 router/protocol tests passed in 83.2 seconds. Real paired v2
+  sockets return independent client/daemon legs; an untrusted `X-Real-IP` cannot
+  replace the socket peer, and a trusted proxy reports public fallback without
+  incorrectly attaching the private carrier.

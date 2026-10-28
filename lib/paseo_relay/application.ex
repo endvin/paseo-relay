@@ -12,6 +12,7 @@ defmodule PaseoRelay.Application do
       {DNSCluster, query: config.cluster_query || :ignore},
       {PaseoRelay.Drain, config.drain},
       PaseoRelay.Metrics,
+      PaseoRelay.RouteObservations,
       {PaseoRelay.RuntimeSupervisor, config}
     ]
 

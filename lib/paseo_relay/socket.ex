@@ -19,6 +19,7 @@ defmodule PaseoRelay.Socket do
          {:local, owner, reservation, admission} <-
            route(connection, options, Map.fetch!(request, :pid)) do
       state = %{
+        route_request: request,
         admission: admission,
         config: options.config,
         connection: connection,
@@ -85,7 +86,14 @@ defmodule PaseoRelay.Socket do
           monitor: Process.monitor(capacity)
         })
 
-      attach_writer(writer, state)
+      result = attach_writer(writer, Map.delete(state, :route_request))
+
+      case result do
+        {[], _} -> PaseoRelay.RouteObservations.track(state.route_request, state.connection)
+        _ -> :ok
+      end
+
+      result
     else
       {:error, _reason} -> {[{:close, 1012, "Session expired"}], state}
     end

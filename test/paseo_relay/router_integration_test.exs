@@ -24,6 +24,139 @@ defmodule PaseoRelay.RouterIntegrationTest do
     %{port: port}
   end
 
+  test "route observations require a live socket token and never disclose network addresses", %{
+    port: port
+  } do
+    file = Path.join(System.tmp_dir!(), "relay-route-#{System.unique_integer([:positive])}.json")
+
+    File.write!(
+      file,
+      Jason.encode!(%{
+        relay: %{id: "singapore", label: "Singapore"},
+        trustedProxies: [],
+        ingresses: [%{address: "127.0.0.1", id: "guangzhou", label: "Guangzhou", path: "private"}],
+        uplink: %{
+          id: "shenzhen-hk",
+          label: "Shenzhen–Hong Kong",
+          fallback: false,
+          observedAt: DateTime.to_iso8601(DateTime.utc_now()),
+          expiresAt: DateTime.to_iso8601(DateTime.add(DateTime.utc_now(), 180))
+        }
+      })
+    )
+
+    Application.put_env(:paseo_relay, :route_info_file, file)
+
+    on_exit(fn ->
+      Application.delete_env(:paseo_relay, :route_info_file)
+      File.rm(file)
+      PaseoRelay.RouteObservations.refresh()
+    end)
+
+    :ok = PaseoRelay.RouteObservations.refresh()
+    token = String.duplicate("a", 40)
+    {:ok, socket} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])
+
+    path =
+      "/ws?serverId=route-observation&connectionId=route-client&role=client&v=2&routeToken=#{token}"
+
+    :ok =
+      :gen_tcp.send(socket, [
+        "GET ",
+        path,
+        " HTTP/1.1\r\nHost: localhost\r\n",
+        websocket_headers(),
+        "X-Real-IP: 192.0.2.1\r\n\r\n"
+      ])
+
+    assert {:ok, "HTTP/1.1 101" <> _} = :gen_tcp.recv(socket, 0, 2_000)
+
+    assert_eventually(fn ->
+      response = request(port, "/route", ["x-relay-route-token: #{token}\r\n"])
+      String.starts_with?(response, "HTTP/1.1 200")
+    end)
+
+    response = request(port, "/route", ["x-relay-route-token: #{token}\r\n"])
+    assert response =~ "shenzhen-hk"
+    assert response =~ "guangzhou"
+    refute response =~ "127.0.0.1"
+    refute response =~ token
+    assert response =~ "access-control-allow-origin: *"
+    assert response =~ ~s("daemon":null)
+
+    {:ok, daemon} = :gen_tcp.connect({127, 0, 0, 1}, port, [:binary, active: false])
+
+    :ok =
+      :gen_tcp.send(daemon, [
+        "GET /ws?serverId=route-observation&connectionId=route-client&role=server&v=2 HTTP/1.1\r\nHost: localhost\r\n",
+        websocket_headers(),
+        "X-Real-IP: 192.0.2.2\r\n\r\n"
+      ])
+
+    assert {:ok, "HTTP/1.1 101" <> _} = :gen_tcp.recv(daemon, 0, 2_000)
+
+    assert_eventually(fn ->
+      not String.contains?(
+        request(port, "/route", ["x-relay-route-token: #{token}\r\n"]),
+        ~s("daemon":null)
+      )
+    end)
+
+    # Forwarded headers cannot override the physical peer until explicitly trusted.
+    untrusted = file |> File.read!() |> Jason.decode!()
+    assert request(port, "/route", ["x-relay-route-token: #{token}\r\n"]) =~ "shenzhen-hk"
+
+    trusted =
+      Map.merge(untrusted, %{
+        "trustedProxies" => ["127.0.0.1"],
+        "ingresses" => [
+          %{
+            "address" => "192.0.2.1",
+            "id" => "guangzhou",
+            "label" => "Guangzhou",
+            "path" => "public-fallback"
+          }
+        ]
+      })
+
+    File.write!(file, Jason.encode!(trusted))
+    :ok = PaseoRelay.RouteObservations.refresh()
+
+    [_, body] =
+      :binary.split(request(port, "/route", ["x-relay-route-token: #{token}\r\n"]), "\r\n\r\n")
+
+    route = Jason.decode!(body)
+    assert route["client"]["path"] == "public-fallback"
+    assert route["client"]["uplink"] == nil
+    assert route["daemon"]["path"] == "direct"
+    refute body =~ "192.0.2"
+    :gen_tcp.close(daemon)
+
+    assert "HTTP/1.1 404" <> _ =
+             request(port, "/route", ["x-relay-route-token: #{String.duplicate("b", 40)}\r\n"])
+
+    File.write!(
+      file,
+      Jason.encode!(%{
+        relay: %{id: "singapore", label: "Singapore"},
+        trustedProxies: [],
+        ingresses: [%{address: "127.0.0.1", id: "guangzhou", label: "Guangzhou", path: "private"}],
+        uplink: %{id: "old", label: "expired", expiresAt: "2000-01-01T00:00:00Z"}
+      })
+    )
+
+    :ok = PaseoRelay.RouteObservations.refresh()
+    refute request(port, "/route", ["x-relay-route-token: #{token}\r\n"]) =~ "expired"
+    :gen_tcp.close(socket)
+
+    assert_eventually(fn ->
+      String.starts_with?(
+        request(port, "/route", ["x-relay-route-token: #{token}\r\n"]),
+        "HTTP/1.1 404"
+      )
+    end)
+  end
+
   test "a locally owned websocket request upgrades", %{port: port} do
     active_websockets = PaseoRelay.Metrics.value(:active_websockets)
     {socket, response} = open_websocket(port, "srv_local")
@@ -146,10 +279,12 @@ defmodule PaseoRelay.RouterIntegrationTest do
 
   test "metrics exposes local names and values", %{port: port} do
     before = PaseoRelay.Metrics.snapshot()
-    {socket, _response} = open_websocket(port, "srv_metrics")
+    {socket, response} = open_websocket(port, "srv_metrics")
 
-    {:ok, <<0x81, sync_bytes, _sync_payload::binary-size(sync_bytes)>>} =
-      :gen_tcp.recv(socket, 0, 2_000)
+    # The upgrade and first frame can arrive in the same TCP read.
+    [_, buffered] = :binary.split(response, "\r\n\r\n")
+    {:ok, frame} = if buffered == "", do: :gen_tcp.recv(socket, 0, 2_000), else: {:ok, buffered}
+    <<0x81, sync_bytes, _sync_payload::binary-size(sync_bytes)>> = frame
 
     metrics = request(port, "/metrics")
 

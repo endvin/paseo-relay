@@ -225,3 +225,23 @@ assumptions:
 ```sh
 docker build -f deployment/load/Dockerfile -t paseo-relay-load .
 ```
+
+## Per-connection route observations
+
+Operators may mount a small JSON file and set `PASEO_RELAY_ROUTE_INFO_FILE`. The relay
+refreshes it every five seconds. Missing or invalid configuration disables observations;
+forwarding and encryption are unchanged. The file contains `relay: {id, label}`,
+`trustedProxies: [IP]`, `ingresses: [{address, id, label, path}]`, and an optional
+`uplink: {id, label, fallback, observedAt, expiresAt}`. Ingress paths are `private`,
+`public-fallback`, or `direct`. Carrier observations expire within 180 seconds.
+Only explicitly trusted proxy peers may supply `X-Real-IP`; configure the proxy to
+replace that header. IP addresses and extra configuration fields never appear in responses.
+
+A v2 client may add a fresh random `routeToken` (32–128 URL-safe characters) to each
+WebSocket attempt. It reads `GET /route` with `x-relay-route-token` using that token.
+The response describes both live data sockets, `client` and `daemon`, separately;
+`daemon` is null until paired. Routing IDs remain relay-assigned. The read capability
+expires when its socket closes; a reconnect needs a new token. Responses are `no-store`
+and support credential-free browser CORS. Unsupported, missing, or dead observations
+return 404. This metadata is operator-reported diagnostics, not peer authentication,
+and never changes the encrypted handshake or payload frames.

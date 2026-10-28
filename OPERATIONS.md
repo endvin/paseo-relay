@@ -29,6 +29,16 @@ processes.
   sessions), add a gauge to `PaseoRelay.Metrics` and read it from `/metrics`
   like everything else.
 
+## Optional connection path diagnostics
+
+Route observations keep only bounded metadata for live v2 data sockets, with process
+monitors to remove dead entries. Reads use indexed ETS lookups, never Owner state dumps.
+The JSON source is capped at 64 KiB and 32 ingress/proxy entries; tokens are capped at
+128 bytes. Socket capacity and payload limits are unchanged. Missing or stale carrier
+data yields an unconfirmed carrier, while the original socket ingress remains distinct
+from newer connections that may have switched between private and public paths.
+The endpoint reports operator network metadata only; it is not an authentication signal.
+
 ## Capacity model
 
 The relay does not assume a particular production topology. An operator may

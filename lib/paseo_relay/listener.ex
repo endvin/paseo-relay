@@ -69,6 +69,7 @@ defmodule PaseoRelay.Listener do
         {:_,
          [
            {"/ws", PaseoRelay.Socket, socket_options},
+           {"/route", PaseoRelay.RouteInfo, %{}},
            {:_, PaseoRelay.Operations,
             %{config: config, connection_budget: socket_options.connection_budget}}
          ]}
